@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import anthropic
-import json
 
 # ── CONFIG ──────────────────────────────────────────────────
 st.set_page_config(
@@ -40,7 +39,7 @@ TASA_VENTA = {
     "Satisfactorio":        0.38,
 }
 
-# ── CARGAR PRECIOS DESDE CSV (opcional) ─────────────────────
+# ── CARGAR PRECIOS DESDE CSV ─────────────────────────────────
 def cargar_precios_csv(archivo):
     try:
         df = pd.read_csv(archivo)
@@ -118,7 +117,7 @@ def calcular_lote(marcas_lote, kg_total, precio_kg, precios):
         "desglose": desglose,
     }
 
-# ── AGENTE IA (Claude) ───────────────────────────────────────
+# ── AGENTE IA ────────────────────────────────────────────────
 def llamar_agente(api_key, resultado, marcas_lote, kg_total, precio_kg, precios):
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -179,8 +178,12 @@ st.caption("Decide si un lote de ropa por kilos vale la pena antes de comprarlo"
 with st.sidebar:
     st.header("Configuración")
 
-    api_key = st.text_input("API Key de Anthropic", type="password",
-                             placeholder="sk-ant-...")
+    # API key desde secrets automáticamente
+    api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    if api_key:
+        st.success("API Key cargada correctamente")
+    else:
+        st.warning("API Key no encontrada en secrets")
 
     st.divider()
     st.subheader("Actualizar precios")
@@ -265,7 +268,7 @@ if st.button("🔍 Evaluar lote", type="primary", use_container_width=True):
     k4.metric("Precio máx. seguro", f"{resultado['precio_max_kg']} €/kg",
               help="Precio máximo por kg para mantener ROI ≥ 100%")
 
-    # Veredicto visual
+    # Veredicto
     roi = resultado["roi"]
     if roi >= 200:
         st.success(f"✅ COMPRA MUY RECOMENDADA — ROI del {roi}%")
@@ -286,17 +289,16 @@ if st.button("🔍 Evaluar lote", type="primary", use_container_width=True):
     # Agente IA
     st.subheader("🤖 Análisis del Agente IA")
     if not api_key:
-        st.info("Introduce tu API Key de Anthropic en el panel lateral para activar el análisis IA.")
+        st.info("API Key no encontrada. Añádela en Advanced Settings → Secrets.")
     else:
         analisis = llamar_agente(
             api_key, resultado,
             st.session_state.marcas_lote,
             kg_total, precio_kg, precios_activos
         )
-        st.session_state.analisis_ia = analisis
         st.markdown(analisis)
 
-# ── HISTORIAL ─────────────────────────────────────────────────
+# ── DATOS CSV ─────────────────────────────────────────────────
 if df_csv is not None:
     with st.expander("Ver datos del CSV cargado"):
         st.dataframe(df_csv.head(50), use_container_width=True)
