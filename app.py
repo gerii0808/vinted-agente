@@ -41,17 +41,28 @@ TASA_VENTA = {
 def cargar_precios_csv(archivo):
     try:
         df = pd.read_csv(archivo)
-        df["precio_num"] = (
-            df["precio_raw"]
-            .str.replace("€", "", regex=False)
-            .str.replace(" ", "", regex=False)
-            .str.replace(",", ".", regex=False)
-            .pipe(pd.to_numeric, errors="coerce")
-        )
-        df = df.dropna(subset=["precio_num"])
-        df = df[df["precio_num"].between(1, 300)]
+        
+        # Detectar columna de precio automáticamente
+        if "precio_num" in df.columns:
+            df["precio_final"] = pd.to_numeric(df["precio_num"], errors="coerce")
+        elif "precio_raw" in df.columns:
+            df["precio_final"] = (
+                df["precio_raw"]
+                .astype(str)
+                .str.replace("€", "", regex=False)
+                .str.replace(" ", "", regex=False)
+                .str.replace(",", ".", regex=False)
+                .pipe(pd.to_numeric, errors="coerce")
+            )
+        else:
+            st.error("El CSV no tiene columna precio_num ni precio_raw")
+            return None, None
+
+        df = df.dropna(subset=["precio_final"])
+        df = df[df["precio_final"].between(1, 300)]
+
         resumen = (
-            df.groupby("marca_busqueda")["precio_num"]
+            df.groupby("marca_busqueda")["precio_final"]
             .agg(med="median", p75=lambda x: x.quantile(0.75),
                  min="min", max="max")
             .reset_index()
@@ -66,6 +77,7 @@ def cargar_precios_csv(archivo):
                 "max": round(row["max"], 2),
             }
         return precios, df
+
     except Exception as e:
         st.error(f"Error al leer CSV: {e}")
         return None, None
