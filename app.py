@@ -1,15 +1,14 @@
 import streamlit as st
 import pandas as pd
-import anthropic
+import requests
+import json
 
-# ── CONFIG ──────────────────────────────────────────────────
 st.set_page_config(
     page_title="Agente Vinted — Evaluador de Lotes",
     page_icon="👕",
     layout="wide"
 )
 
-# ── DATOS BASE (scraping real 08/05/2026) ───────────────────
 PRECIOS_BASE = {
     "Lacoste":         {"med": 29.9, "p75": 55.0, "min": 13.0, "max": 120.0},
     "Ralph Lauren":    {"med": 24.0, "p75": 40.0, "min": 8.0,  "max": 95.0},
@@ -39,7 +38,6 @@ TASA_VENTA = {
     "Satisfactorio":        0.38,
 }
 
-# ── CARGAR PRECIOS DESDE CSV ─────────────────────────────────
 def cargar_precios_csv(archivo):
     try:
         df = pd.read_csv(archivo)
@@ -72,7 +70,6 @@ def cargar_precios_csv(archivo):
         st.error(f"Error al leer CSV: {e}")
         return None, None
 
-# ── CÁLCULO ──────────────────────────────────────────────────
 def calcular_lote(marcas_lote, kg_total, precio_kg, precios):
     coste = kg_total * precio_kg
     ingresos = 0.0
@@ -117,20 +114,15 @@ def calcular_lote(marcas_lote, kg_total, precio_kg, precios):
         "desglose": desglose,
     }
 
-# ── AGENTE IA ────────────────────────────────────────────────
 def llamar_agente(api_key, resultado, marcas_lote, kg_total, precio_kg, precios):
-    client = anthropic.Anthropic(api_key=api_key)
-
     contexto_precios = "\n".join([
         f"- {m}: precio mediano {d['med']}€, rango {d['min']}–{d['max']}€"
         for m, d in precios.items()
     ])
-
     composicion = "\n".join([
         f"  · {r['marca']} ({r['n']} piezas, estado: {r['estado']})"
         for r in marcas_lote
     ])
-
     prompt = f"""Eres un experto en compraventa de ropa de segunda mano en Vinted España, especializado en lotes por kilos.
 
 DATOS REALES DEL MERCADO (scraping Vinted.es):
@@ -153,32 +145,36 @@ ANÁLISIS CALCULADO:
 Dame un análisis experto en español que incluya:
 1. Veredicto claro (comprar / no comprar / negociar precio)
 2. Por qué en base a los datos reales del mercado
-3. Qué marcas del lote son las más valiosas y cuáles lastran el margen
-4. Consejo concreto de precio máximo a negociar si el ROI es bajo
-5. Un riesgo clave a tener en cuenta con este lote específico
+3. Qué marcas son las más valiosas y cuáles lastran el margen
+4. Consejo de precio máximo a negociar si el ROI es bajo
+5. Un riesgo clave con este lote
 
 Sé directo, usa números concretos, máximo 200 palabras."""
 
     with st.spinner("El agente IA está analizando el lote..."):
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}]
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}]
+            }
         )
-    return message.content[0].text
+    return response.json()["content"][0]["text"]
 
-# ════════════════════════════════════════════════════════════
-# UI
-# ════════════════════════════════════════════════════════════
+
+# ── UI ───────────────────────────────────────────────────────
 
 st.title("👕 Agente Vinted — Evaluador de Lotes")
 st.caption("Decide si un lote de ropa por kilos vale la pena antes de comprarlo")
 
-# ── SIDEBAR ──────────────────────────────────────────────────
 with st.sidebar:
     st.header("Configuración")
-
-    # API key desde secrets automáticamente
     api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
     if api_key:
         st.success("API Key cargada correctamente")
@@ -203,16 +199,14 @@ with st.sidebar:
     for m, d in sorted(precios_activos.items(), key=lambda x: -x[1]["med"]):
         st.caption(f"**{m}**: {d['med']}€ med.")
 
-# ── PARÁMETROS DEL LOTE ──────────────────────────────────────
 st.subheader("Parámetros del lote")
 col1, col2 = st.columns(2)
 with col1:
-    kg_total  = st.number_input("Peso total (kg)", min_value=1, max_value=500, value=20)
+    kg_total = st.number_input("Peso total (kg)", min_value=1, max_value=500, value=20)
 with col2:
     precio_kg = st.number_input("Precio pagado (€/kg)", min_value=0.5, max_value=50.0,
                                  value=5.0, step=0.5)
 
-# ── COMPOSICIÓN DEL LOTE ─────────────────────────────────────
 st.subheader("Composición del lote")
 st.caption("Añade las marcas que el vendedor dice que hay en el lote")
 
@@ -250,25 +244,19 @@ if st.button("+ Añadir marca"):
 
 st.divider()
 
-# ── EVALUAR ──────────────────────────────────────────────────
 if st.button("🔍 Evaluar lote", type="primary", use_container_width=True):
-
     resultado = calcular_lote(
         st.session_state.marcas_lote, kg_total, precio_kg, precios_activos
     )
-    st.session_state.resultado = resultado
 
-    # KPIs
     st.subheader("Resultado del análisis")
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Inversión total",    f"{resultado['coste']:.2f} €")
     k2.metric("Ingresos estimados", f"{resultado['ingresos']:.2f} €",
               delta=f"+{resultado['beneficio']:.2f} €")
     k3.metric("ROI",                f"{resultado['roi']}%")
-    k4.metric("Precio máx. seguro", f"{resultado['precio_max_kg']} €/kg",
-              help="Precio máximo por kg para mantener ROI ≥ 100%")
+    k4.metric("Precio máx. seguro", f"{resultado['precio_max_kg']} €/kg")
 
-    # Veredicto
     roi = resultado["roi"]
     if roi >= 200:
         st.success(f"✅ COMPRA MUY RECOMENDADA — ROI del {roi}%")
@@ -281,12 +269,9 @@ if st.button("🔍 Evaluar lote", type="primary", use_container_width=True):
     else:
         st.error(f"❌ NO RECOMENDADO — Genera pérdidas. ROI del {roi}%")
 
-    # Desglose
     st.subheader("Desglose por marca")
-    df_desglose = pd.DataFrame(resultado["desglose"])
-    st.dataframe(df_desglose, use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(resultado["desglose"]), use_container_width=True, hide_index=True)
 
-    # Agente IA
     st.subheader("🤖 Análisis del Agente IA")
     if not api_key:
         st.info("API Key no encontrada. Añádela en Advanced Settings → Secrets.")
@@ -298,7 +283,6 @@ if st.button("🔍 Evaluar lote", type="primary", use_container_width=True):
         )
         st.markdown(analisis)
 
-# ── DATOS CSV ─────────────────────────────────────────────────
 if df_csv is not None:
     with st.expander("Ver datos del CSV cargado"):
         st.dataframe(df_csv.head(50), use_container_width=True)
