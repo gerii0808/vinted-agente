@@ -151,7 +151,12 @@ Dame un análisis experto en español (máximo 200 palabras) con:
                 "messages": [{"role": "user", "content": prompt}]
             }
         )
-    return response.json()["content"][0]["text"]
+    resp_json = response.json()
+    if "content" in resp_json:
+        return resp_json["content"][0]["text"]
+    else:
+        error_msg = resp_json.get("error", {}).get("message", str(resp_json))
+        return f"⚠️ Error de la API: {error_msg}"
 
 
 # ── UI ───────────────────────────────────────────────────────
